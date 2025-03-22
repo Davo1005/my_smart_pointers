@@ -75,6 +75,12 @@ public:
         : m_ptr(other.m_ptr), control_block(other.control_block), deleter(other.deleter) {
         control_block->add_shared();
     }
+    
+    shared_ptr(const weak_ptr<T>& weak) 
+        : m_ptr(weak.get()), control_block(weak.get_control_block()), deleter(Deleter()) {
+        if(control_block)
+        control_block->add_shared();
+    }
 
     shared_ptr(shared_ptr&& other) noexcept 
         : m_ptr(other.m_ptr), control_block(other.control_block), deleter(std::move(other.deleter)) {
@@ -93,10 +99,15 @@ public:
 
     shared_ptr& operator=(const shared_ptr& other) {
         if (this != &other) {
+            release();
             m_ptr = other.m_ptr;
             control_block = other.control_block;
             deleter = other.deleter;
-            control_block->add_shared();
+            deleter = other.deleter;
+            other.control_block=nullptr;
+            other.deleter = nullptr;
+            other.m_ptr = nullptr;
+
         }
         return *this;
     }
@@ -126,6 +137,24 @@ public:
     explicit operator bool() const noexcept {
         return m_ptr != nullptr;
     }
+    void reset(T* p = nullptr) {
+        if (m_ptr != p) {
+            control_block->release_shared();
+            m_ptr = p;
+            control_block = new ControlBlock<T>(p);
+            control_block->add_shared();
+        }
+    }
+    void release() {
+       if(--control_block->shared_count == 0) {
+           delete m_ptr;
+           delete control_block;
+       }
+       else {
+           m_ptr = nullptr;
+           control_block = nullptr;
+       }
+    }
    ControlBlock<T>* get_control_block() const {
         return control_block;
     }
@@ -138,16 +167,18 @@ private:
 template <typename T>
 class weak_ptr {
 public:
-    weak_ptr() : m_ptr(nullptr), control_block(nullptr) {}
+    weak_ptr(T* p = nullptr) : m_ptr(p), control_block(nullptr) {}
 
     weak_ptr(const shared_ptr<T>& shared) 
         : m_ptr(shared.get()), control_block(shared.get_control_block()) {
-        control_block->add_weak();
+            if(control_block)
+            control_block->add_weak();
     }
 
     weak_ptr(const weak_ptr& other) 
         : m_ptr(other.m_ptr), control_block(other.control_block) {
-        control_block->add_weak();
+            if(control_block)
+            control_block->add_weak();
     }
 
     weak_ptr(weak_ptr&& other) noexcept 
@@ -163,15 +194,34 @@ public:
     }
 
     weak_ptr& operator=(const weak_ptr& other) {
+        if(this == &other) {
+            return *this;
+        }
+        if(control_block) {
+            control_block->release_weak();
+        }
         m_ptr = other.m_ptr;
         control_block = other.control_block;
-        control_block->add_weak();
-        return *this;
+        if(control_block)
+        {
+            control_block->add_weak();
+        
+        }
+            return *this;
     }
 
     weak_ptr& operator=(weak_ptr&& other) noexcept {
+        if(control_block) {
+            control_block->release_weak();
+        }
         m_ptr = other.m_ptr;
         control_block = other.control_block;
+        if(control_block)
+        {
+            control_block->add_weak();
+        
+        }
+            return *this;
         other.m_ptr = nullptr;
         other.control_block = nullptr;
         return *this;
@@ -179,7 +229,7 @@ public:
 
     shared_ptr<T> lock() const {
         if(control_block->get_shared_count() == 0) {
-            return shared_ptr<T>();
+            return shared_ptr<T>(*this);
         }
         return shared_ptr<T>(m_ptr);
     }
@@ -191,7 +241,12 @@ public:
     explicit operator bool() const noexcept {
         return m_ptr != nullptr;
     }
-
+    T* get() const {
+        return m_ptr;
+    }
+    ControlBlock<T>* get_control_block() const {
+        return control_block;
+    }
 private:
     T* m_ptr;
     ControlBlock<T>* control_block;
